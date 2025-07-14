@@ -1,18 +1,6 @@
-import dotenv from "dotenv";
-import { createOllama } from "ollama-ai-provider";
+// src/mastra/config.ts
+import { openai } from "@ai-sdk/openai";
 
-// Load environment variables once at the beginning
-dotenv.config();
-
-// Export all your environment variables
-// Defaults to Ollama qwen2.5:1.5b
-// https://ollama.com/library/qwen2.5
-export const modelName = process.env.MODEL_NAME_AT_ENDPOINT ?? "qwen2.5:1.5b";
-export const baseURL = process.env.API_BASE_URL ?? "http://127.0.0.1:11434/api";
-
-// Create and export the model instance
-export const model = createOllama({ baseURL }).chat(modelName, {
-  simulateStreaming: true,
-});
-
-console.log(`ModelName: ${modelName}\nbaseURL: ${baseURL}`);
+// Definimos el modelo que usará nuestro agente.
+// 'gpt-4o-mini' es rápido, barato e inteligente, ideal para este hackathon.
+export const model = openai("gpt-4o-mini");
