@@ -39,4 +39,4 @@ pnpm run deploy:qwen
 - `ollama-ai-provider`: ^1.2.0
 - `zod`: ^3.25.67
 
-This project also includes development dependencies such as `@biomejs/biome`, `@nosana/cli`, and `typescript` for enhanced development experience.
+This project also includes development dependencies such as `@biomejs/biome`, `@nosana/cli`, and `typescript` for an enhanced development experience.
