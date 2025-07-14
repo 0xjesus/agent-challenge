@@ -28,88 +28,142 @@ async function getFileContent(octokit: Octokit, owner: string, repo: string, pat
     
     if ('content' in fileData) {
       const decodedContent = Buffer.from(fileData.content, 'base64').toString('utf-8');
-      console.log(`✅ [FileRead] ${path}: ${decodedContent.length} chars`);
       return decodedContent;
     }
   } catch (error: any) {
-    if (error.status === 404) {
-      console.log(`❌ [FileRead] ${path}: Not found`);
-    } else {
-      console.error(`💥 [FileRead] ${path}: Error - ${error.message}`);
-    }
+    // File doesn't exist or can't be read
+    return null;
   }
   return null;
 }
 
-async function getProjectContext(octokit: Octokit, owner: string, repo: string, changedFiles: string[]): Promise<string> {
-  console.log(`🔍 [Context] Analyzing ${changedFiles.length} changed files:`, changedFiles);
+async function getProjectStructure(octokit: Octokit, owner: string, repo: string): Promise<string> {
+  console.log(`📂 [Structure] Scanning project structure for ${owner}/${repo}`);
   
-  const relevantExtensions = ['.ts', '.js', '.tsx', '.jsx', '.py', '.java', '.go', '.rs', '.cpp', '.c', '.php', '.rb', '.swift', '.kt', '.cs', '.vue', '.svelte', '.md', '.json', '.yaml', '.yml', '.toml', '.sql'];
-  const excludePatterns = ['/node_modules/', '/dist/', '/build/', '/.git/', '/coverage/', '/temp/', '/tmp/'];
-  
-  // Filter relevant files
-  const relevantFiles = changedFiles.filter(file => {
-    const hasRelevantExtension = relevantExtensions.some(ext => file.endsWith(ext));
-    const isNotExcluded = !excludePatterns.some(pattern => file.includes(pattern));
-    return hasRelevantExtension && isNotExcluded;
-  });
-
-  console.log(`📁 [Context] ${relevantFiles.length} relevant files found:`, relevantFiles);
-
-  let projectContent = '';
-  
-  // If no relevant files from changes, scan repository for key files
-  if (relevantFiles.length === 0) {
-    console.log(`🔄 [Context] No relevant changed files, scanning repository...`);
+  try {
+    // Get the complete repository tree
+    const { data: repoTree } = await octokit.git.getTree({ 
+      owner, 
+      repo, 
+      tree_sha: 'HEAD',
+      recursive: 'true'
+    });
     
-    try {
-      const { data: repoTree } = await octokit.git.getTree({ 
-        owner, 
-        repo, 
-        tree_sha: 'HEAD',
-        recursive: 'true'
-      });
-      
-      const keyFiles = repoTree.tree
-        .filter(item => 
-          item.type === 'blob' && 
-          item.path &&
-          relevantExtensions.some(ext => item.path!.endsWith(ext)) &&
-          !excludePatterns.some(pattern => item.path!.includes(pattern))
-        )
-        .slice(0, 8);
-      
-      console.log(`📂 [Context] Found ${keyFiles.length} key project files:`, keyFiles.map(f => f.path));
-      
-      for (const file of keyFiles) {
-        if (file.path) {
-          const content = await getFileContent(octokit, owner, repo, file.path);
-          if (content && content.length > 0) {
-            // Limit content to avoid overwhelming the AI
-            const truncatedContent = content.length > 2000 ? content.substring(0, 2000) + '\n...[truncated]' : content;
-            projectContent += `\n--- ${file.path} ---\n${truncatedContent}\n`;
-          }
+    console.log(`📊 [Structure] Found ${repoTree.tree.length} total items in repository`);
+    
+    // Create a directory structure representation
+    const structure = {
+      files: [] as string[],
+      directories: [] as string[],
+      keyFiles: [] as { path: string; content: string }[]
+    };
+    
+    // Categorize items
+    repoTree.tree.forEach(item => {
+      if (item.path) {
+        if (item.type === 'tree') {
+          structure.directories.push(item.path);
+        } else if (item.type === 'blob') {
+          structure.files.push(item.path);
         }
       }
-    } catch (error: any) {
-      console.error(`❌ [Context] Repository scan failed: ${error.message}`);
-    }
-  } else {
-    // Process changed files
-    const priorityFiles = relevantFiles.slice(0, 10);
+    });
     
-    for (const filePath of priorityFiles) {
-      const content = await getFileContent(octokit, owner, repo, filePath);
-      if (content && content.length > 0) {
-        // Limit content to avoid overwhelming the AI
-        const truncatedContent = content.length > 2000 ? content.substring(0, 2000) + '\n...[truncated]' : content;
-        projectContent += `\n--- ${filePath} ---\n${truncatedContent}\n`;
+    console.log(`📁 [Structure] ${structure.files.length} files, ${structure.directories.length} directories`);
+    
+    // Identify key files to read content from
+    const keyFilePatterns = [
+      'package.json',
+      'README.md',
+      'Dockerfile',
+      'docker-compose.yml',
+      'docker-compose.yaml',
+      '.env.example',
+      'requirements.txt',
+      'Cargo.toml',
+      'go.mod',
+      'pom.xml',
+      'build.gradle',
+      'tsconfig.json',
+      'next.config.js',
+      'next.config.ts',
+      'vite.config.js',
+      'vite.config.ts'
+    ];
+    
+    const importantExtensions = ['.ts', '.js', '.tsx', '.jsx', '.py', '.go', '.rs', '.java', '.cpp', '.c'];
+    const excludePatterns = ['node_modules/', 'dist/', 'build/', '.git/', 'coverage/', '__pycache__/', 'target/'];
+    
+    // Get key configuration files
+    for (const pattern of keyFilePatterns) {
+      const foundFile = structure.files.find(f => f === pattern || f.endsWith(`/${pattern}`));
+      if (foundFile) {
+        const content = await getFileContent(octokit, owner, repo, foundFile);
+        if (content) {
+          structure.keyFiles.push({ path: foundFile, content });
+          console.log(`📄 [Structure] Read key file: ${foundFile} (${content.length} chars)`);
+        }
       }
     }
+    
+    // Get main source files (limit to avoid overwhelming)
+    const sourceFiles = structure.files
+      .filter(f => {
+        const hasImportantExtension = importantExtensions.some(ext => f.endsWith(ext));
+        const isNotExcluded = !excludePatterns.some(pattern => f.includes(pattern));
+        const isInSrcOrRoot = f.startsWith('src/') || !f.includes('/');
+        return hasImportantExtension && isNotExcluded && isInSrcOrRoot;
+      })
+      .slice(0, 10); // Limit to prevent context overflow
+    
+    console.log(`💻 [Structure] Reading ${sourceFiles.length} source files:`, sourceFiles);
+    
+    for (const filePath of sourceFiles) {
+      const content = await getFileContent(octokit, owner, repo, filePath);
+      if (content) {
+        // Truncate large files
+        const truncatedContent = content.length > 1500 ? 
+          content.substring(0, 1500) + '\n... [truncated for brevity]' : content;
+        structure.keyFiles.push({ path: filePath, content: truncatedContent });
+      }
+    }
+    
+    // Build structure summary
+    let structureSummary = `# Project Structure\n\n`;
+    
+    // Root files
+    const rootFiles = structure.files.filter(f => !f.includes('/'));
+    if (rootFiles.length > 0) {
+      structureSummary += `## Root Files\n${rootFiles.map(f => `- ${f}`).join('\n')}\n\n`;
+    }
+    
+    // Main directories
+    const mainDirs = structure.directories.filter(d => !d.includes('/'));
+    if (mainDirs.length > 0) {
+      structureSummary += `## Main Directories\n${mainDirs.map(d => `- ${d}/`).join('\n')}\n\n`;
+    }
+    
+    // Source files in src/
+    const srcFiles = structure.files.filter(f => f.startsWith('src/'));
+    if (srcFiles.length > 0) {
+      structureSummary += `## Source Files (src/)\n${srcFiles.slice(0, 20).map(f => `- ${f}`).join('\n')}\n\n`;
+    }
+    
+    // File contents
+    if (structure.keyFiles.length > 0) {
+      structureSummary += `## File Contents\n\n`;
+      for (const { path, content } of structure.keyFiles) {
+        structureSummary += `### ${path}\n\`\`\`\n${content}\n\`\`\`\n\n`;
+      }
+    }
+    
+    console.log(`✅ [Structure] Generated structure summary: ${structureSummary.length} characters`);
+    return structureSummary;
+    
+  } catch (error: any) {
+    console.error(`❌ [Structure] Failed to get project structure: ${error.message}`);
+    return 'Unable to analyze project structure.';
   }
-
-  console.log(`📊 [Context] Total project content: ${projectContent.length} characters`);
-  return projectContent;
 }
 
 export const mastra = new Mastra({
@@ -119,140 +173,145 @@ export const mastra = new Mastra({
     middleware: [
       async (c, next) => {
         if (c.req.method === 'POST' && c.req.path === '/api/github-webhook') {
-          console.log('🚀 [Webhook] GitHub push received');
+          console.log('🚀 [Webhook] Received GitHub push webhook');
           
           try {
             const payload = await c.req.json();
             const pushData = pushPayloadSchema.parse(payload);
 
             if (!pushData.head_commit) {
-              console.log('❌ [Webhook] No head_commit, skipping');
+              console.log('❌ [Webhook] No head_commit found, skipping');
               return c.json({ status: 'skipped', reason: 'No head_commit found' });
             }
 
-            console.log(`📝 [Webhook] Commit: "${pushData.head_commit.message}"`);
+            const commitMessage = pushData.head_commit.message;
+            console.log(`📝 [Webhook] Commit message: "${commitMessage}"`);
             
-            // REMOVE AI CHECK - Let it update its own README too!
-            // This way it can improve the README based on its own updates
+            // PREVENT INFINITE LOOPS - Skip bot commits
+            if (commitMessage.includes('[AI]') || commitMessage.includes('AI README Bot')) {
+              console.log('🤖 [Webhook] Skipping AI bot commit to prevent loops');
+              return c.json({ status: 'skipped', reason: 'AI bot commit detected' });
+            }
 
+            // Only process default branch
             const defaultBranchRef = `heads/${pushData.repository.default_branch}`;
             if (pushData.ref !== `refs/${defaultBranchRef}`) {
-              console.log(`🚫 [Webhook] Not default branch, skipping`);
+              console.log(`🚫 [Webhook] Not default branch (${pushData.ref}), skipping`);
               return c.json({ status: 'skipped', reason: 'Not default branch' });
             }
 
             const owner = pushData.repository.owner.login;
             const repo = pushData.repository.name;
-            console.log(`🎯 [Webhook] Processing ${owner}/${repo}`);
+            console.log(`🎯 [Webhook] Processing ${owner}/${repo} on default branch`);
+
+            // Initialize GitHub API
+            if (!process.env.GITHUB_TOKEN) {
+              console.error('❌ [GitHub] GITHUB_TOKEN not found in environment');
+              return c.json({ success: false, error: 'GitHub token not configured' }, 500);
+            }
 
             const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
             
-            // Get all changed files
+            // Get changed files info
             const allChangedFiles = [
               ...pushData.head_commit.added,
               ...pushData.head_commit.modified,
               ...pushData.head_commit.removed
             ];
 
-            console.log(`📁 [Files] Changed: ${allChangedFiles.length} files`);
-            console.log(`   Added: ${pushData.head_commit.added.length}`);
-            console.log(`   Modified: ${pushData.head_commit.modified.length}`);
-            console.log(`   Removed: ${pushData.head_commit.removed.length}`);
-
-            // Get package.json for project context
-            let packageJsonContent = '';
-            const packageContent = await getFileContent(octokit, owner, repo, 'package.json');
-            if (packageContent) {
-              packageJsonContent = packageContent;
+            console.log(`📁 [Files] Changed files summary:`);
+            console.log(`   Added: ${pushData.head_commit.added.length} files`);
+            console.log(`   Modified: ${pushData.head_commit.modified.length} files`);
+            console.log(`   Removed: ${pushData.head_commit.removed.length} files`);
+            if (allChangedFiles.length > 0) {
+              console.log(`   Files: ${allChangedFiles.join(', ')}`);
             }
 
-            // Get existing README
-            let existingReadme = '';
-            const readmeContent = await getFileContent(octokit, owner, repo, 'README.md');
-            if (readmeContent) {
-              existingReadme = readmeContent;
-            }
+            // Get complete project structure and content
+            const projectStructure = await getProjectStructure(octokit, owner, repo);
 
-            // Get project context (changed files or repository scan)
-            const projectContext = await getProjectContext(octokit, owner, repo, allChangedFiles);
-
-            // Build AI prompt
+            // Build comprehensive prompt for AI
             const aiPrompt = `
-# README Update Task
+You are tasked with creating a comprehensive README.md for this project.
 
-## Project Information
-- Repository: ${owner}/${repo}
-- Recent changes: ${pushData.head_commit.message}
-- Files changed: ${allChangedFiles.length} (${pushData.head_commit.added.length} added, ${pushData.head_commit.modified.length} modified, ${pushData.head_commit.removed.length} removed)
+# Repository Information
+- **Repository:** ${owner}/${repo}
+- **Recent commit:** ${commitMessage}
+- **Changed files:** ${allChangedFiles.length} files (${pushData.head_commit.added.length} added, ${pushData.head_commit.modified.length} modified, ${pushData.head_commit.removed.length} removed)
 
-## Changed Files List
-${allChangedFiles.map(file => `- ${file}`).join('\n')}
+# Recent Changes
+${allChangedFiles.length > 0 ? allChangedFiles.map(file => `- ${file}`).join('\n') : 'No specific files changed in this commit'}
 
-## Current Package.json
-${packageJsonContent ? packageJsonContent : 'No package.json found'}
+# Complete Project Analysis
+${projectStructure}
 
-## Current README.md
-${existingReadme ? existingReadme : 'No existing README found'}
+# Task
+Generate a professional, comprehensive README.md that includes:
 
-## Project Code Context
-${projectContext ? projectContext : 'No relevant code files found'}
+1. **Project Title and Description** - Clear explanation of what this project does
+2. **Installation Instructions** - How to set up and run the project
+3. **Usage Examples** - Basic usage or getting started guide
+4. **Project Structure** - Brief overview of main directories/files
+5. **Dependencies** - Key technologies and frameworks used
+6. **Contributing** - Basic contribution guidelines if applicable
+7. **License** - If license information is available
 
-## Instructions
-Generate a comprehensive and accurate README.md that:
-1. Reflects the current state of the project based on the code
-2. Includes proper installation instructions if applicable
-3. Explains what the project does clearly
-4. Documents key features and usage
-5. Updates any sections that need to reflect recent changes
-6. Maintains a professional and informative tone
+Make sure the README accurately reflects the current state of the project based on the code and files you can see. Be specific about the technology stack and actual functionality you can identify from the code.
 
-Please generate the complete README.md content.
+Generate the complete README.md content:
             `.trim();
 
-            console.log(`🧠 [AI] Sending ${aiPrompt.length} characters to agent`);
-            console.log(`📋 [AI] Context includes: packageJson=${!!packageJsonContent}, existingReadme=${!!existingReadme}, projectCode=${!!projectContext}`);
+            console.log(`🧠 [AI] Sending prompt to agent (${aiPrompt.length} characters)`);
 
             // Generate README with AI
             const agent = mastra.getAgent('readmeAgent');
             const response = await agent.generate([{ role: 'user', content: aiPrompt }]);
             const newReadmeContent = response.text;
 
-            if (!newReadmeContent || newReadmeContent.length < 50) {
+            if (!newReadmeContent || newReadmeContent.length < 100) {
               console.error(`❌ [AI] Generated README too short: ${newReadmeContent?.length || 0} chars`);
-              return c.json({ success: false, error: 'Generated README too short' }, 500);
+              return c.json({ success: false, error: 'Generated README too short or empty' }, 500);
             }
 
             console.log(`✅ [AI] Generated README: ${newReadmeContent.length} characters`);
 
-            // Check if README already exists to get SHA
+            // Get existing README SHA if it exists
             let existingFileSha: string | undefined;
             try {
               const { data: existingFileData } = await octokit.repos.getContent({ owner, repo, path: 'README.md' });
               existingFileSha = (existingFileData as any).sha;
+              console.log(`📖 [Update] Found existing README.md with SHA: ${existingFileSha}`);
             } catch (error: any) {
-              if (error.status !== 404) throw error;
-              console.log('📝 [Update] Creating new README.md');
+              if (error.status === 404) {
+                console.log('📝 [Update] No existing README.md found, will create new one');
+              } else {
+                throw error;
+              }
             }
 
-            // Commit the new README
+            // Commit the updated README
             const commitResult = await octokit.repos.createOrUpdateFileContents({
               owner,
               repo,
               path: 'README.md',
-              message: 'docs: [AI] Update README.md based on recent changes',
+              message: 'docs: [AI] Update README.md based on project analysis',
               content: Buffer.from(newReadmeContent).toString('base64'),
               sha: existingFileSha,
-              committer: { name: 'AI README Bot', email: 'bot@nosana.io' },
+              committer: { 
+                name: 'AI README Bot', 
+                email: 'bot@nosana.io' 
+              },
               branch: pushData.repository.default_branch
             });
 
-            console.log(`🎉 [Success] README updated successfully`);
-            console.log(`🔗 [Success] Commit: ${commitResult.data.commit.html_url}`);
+            console.log(`🎉 [Success] README.md updated successfully!`);
+            console.log(`🔗 [Success] Commit URL: ${commitResult.data.commit.html_url}`);
 
             return c.json({ 
               success: true, 
-              message: "README updated successfully",
-              filesProcessed: allChangedFiles.length,
+              message: "README.md updated based on project analysis",
+              repository: `${owner}/${repo}`,
+              filesAnalyzed: allChangedFiles.length,
               readmeLength: newReadmeContent.length,
               commit_sha: commitResult.data.commit.sha,
               commit_url: commitResult.data.commit.html_url
@@ -260,15 +319,15 @@ Please generate the complete README.md content.
 
           } catch (error: any) {
             console.error(`💥 [ERROR] Webhook processing failed:`);
-            console.error(`   ${error.name}: ${error.message}`);
+            console.error(`   Error: ${error.name}: ${error.message}`);
             
-            if (error.response) {
-              console.error(`   API Response: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
+            if (error.response?.data) {
+              console.error(`   GitHub API Error:`, error.response.data);
             }
             
             return c.json({ 
               success: false, 
-              error: 'Failed to process webhook', 
+              error: 'Webhook processing failed', 
               details: error.message 
             }, 500);
           }
