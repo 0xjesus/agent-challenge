@@ -23,91 +23,93 @@ const pushPayloadSchema = z.object({
 });
 
 async function getFileContent(octokit: Octokit, owner: string, repo: string, path: string): Promise<string | null> {
-  console.log(`🔍 [getFileContent] Attempting to fetch file: ${owner}/${repo}/${path}`);
-  
   try {
-    console.log(`📡 [getFileContent] Making API call to GitHub for ${path}`);
     const { data: fileData } = await octokit.repos.getContent({ owner, repo, path });
     
-    console.log(`✅ [getFileContent] Successfully received data for ${path}. Type:`, typeof fileData);
-    console.log(`📄 [getFileContent] File data keys:`, Object.keys(fileData));
-    
     if ('content' in fileData) {
-      console.log(`🔓 [getFileContent] File has content property, decoding base64 for ${path}`);
       const decodedContent = Buffer.from(fileData.content, 'base64').toString('utf-8');
-      console.log(`📝 [getFileContent] Content length for ${path}: ${decodedContent.length} characters`);
-      console.log(`📋 [getFileContent] First 100 chars of ${path}:`, decodedContent.substring(0, 100));
+      console.log(`✅ [FileRead] ${path}: ${decodedContent.length} chars`);
       return decodedContent;
-    } else {
-      console.log(`❌ [getFileContent] File ${path} doesn't have content property`);
-      console.log(`🔍 [getFileContent] Available properties:`, Object.keys(fileData));
     }
   } catch (error: any) {
-    console.error(`💥 [getFileContent] Error fetching ${path}:`);
-    console.error(`   Status: ${error.status}`);
-    console.error(`   Message: ${error.message}`);
-    console.error(`   Full error:`, error);
-    
     if (error.status === 404) {
-      console.log(`🚫 [getFileContent] File ${path} not found (might be deleted)`);
+      console.log(`❌ [FileRead] ${path}: Not found`);
     } else {
-      console.error(`⚠️ [getFileContent] Unexpected error for ${path}:`, error.message);
+      console.error(`💥 [FileRead] ${path}: Error - ${error.message}`);
     }
   }
-  
-  console.log(`❌ [getFileContent] Returning null for ${path}`);
   return null;
 }
 
-async function getRelevantChangedFiles(octokit: Octokit, owner: string, repo: string, changedFiles: string[]): Promise<string> {
-  console.log(`🎯 [getRelevantChangedFiles] Starting with ${changedFiles.length} files:`, changedFiles);
+async function getProjectContext(octokit: Octokit, owner: string, repo: string, changedFiles: string[]): Promise<string> {
+  console.log(`🔍 [Context] Analyzing ${changedFiles.length} changed files:`, changedFiles);
   
   const relevantExtensions = ['.ts', '.js', '.tsx', '.jsx', '.py', '.java', '.go', '.rs', '.cpp', '.c', '.php', '.rb', '.swift', '.kt', '.cs', '.vue', '.svelte', '.md', '.json', '.yaml', '.yml', '.toml', '.sql'];
   const excludePatterns = ['/node_modules/', '/dist/', '/build/', '/.git/', '/coverage/', '/temp/', '/tmp/'];
   
-  console.log(`📝 [getRelevantChangedFiles] Relevant extensions:`, relevantExtensions);
-  console.log(`🚫 [getRelevantChangedFiles] Exclude patterns:`, excludePatterns);
-  
+  // Filter relevant files
   const relevantFiles = changedFiles.filter(file => {
-    console.log(`🔍 [getRelevantChangedFiles] Checking file: ${file}`);
-    
-    // Check if file has relevant extension
     const hasRelevantExtension = relevantExtensions.some(ext => file.endsWith(ext));
-    console.log(`   Extension check: ${hasRelevantExtension}`);
-    
-    // Check if file is not in excluded directories
     const isNotExcluded = !excludePatterns.some(pattern => file.includes(pattern));
-    console.log(`   Exclusion check: ${isNotExcluded}`);
-    
-    const isRelevant = hasRelevantExtension && isNotExcluded;
-    console.log(`   Final result: ${isRelevant ? '✅ INCLUDED' : '❌ EXCLUDED'}`);
-    
-    return isRelevant;
+    return hasRelevantExtension && isNotExcluded;
   });
 
-  console.log(`✅ [getRelevantChangedFiles] Filtered to ${relevantFiles.length} relevant files:`, relevantFiles);
+  console.log(`📁 [Context] ${relevantFiles.length} relevant files found:`, relevantFiles);
 
-  // Limit to most important files to avoid context overflow
-  const priorityFiles = relevantFiles.slice(0, 10);
-  console.log(`🎯 [getRelevantChangedFiles] Limited to ${priorityFiles.length} priority files:`, priorityFiles);
+  let projectContent = '';
   
-  let changedContent = '';
-  
-  for (let i = 0; i < priorityFiles.length; i++) {
-    const filePath = priorityFiles[i];
-    console.log(`📁 [getRelevantChangedFiles] Processing file ${i + 1}/${priorityFiles.length}: ${filePath}`);
+  // If no relevant files from changes, scan repository for key files
+  if (relevantFiles.length === 0) {
+    console.log(`🔄 [Context] No relevant changed files, scanning repository...`);
     
-    const content = await getFileContent(octokit, owner, repo, filePath);
-    if (content) {
-      console.log(`✅ [getRelevantChangedFiles] Got content for ${filePath}, adding to result`);
-      changedContent += `\n--- ${filePath} ---\n${content}\n`;
-    } else {
-      console.log(`❌ [getRelevantChangedFiles] No content for ${filePath}, skipping`);
+    try {
+      const { data: repoTree } = await octokit.git.getTree({ 
+        owner, 
+        repo, 
+        tree_sha: 'HEAD',
+        recursive: 'true'
+      });
+      
+      const keyFiles = repoTree.tree
+        .filter(item => 
+          item.type === 'blob' && 
+          item.path &&
+          relevantExtensions.some(ext => item.path!.endsWith(ext)) &&
+          !excludePatterns.some(pattern => item.path!.includes(pattern))
+        )
+        .slice(0, 8);
+      
+      console.log(`📂 [Context] Found ${keyFiles.length} key project files:`, keyFiles.map(f => f.path));
+      
+      for (const file of keyFiles) {
+        if (file.path) {
+          const content = await getFileContent(octokit, owner, repo, file.path);
+          if (content && content.length > 0) {
+            // Limit content to avoid overwhelming the AI
+            const truncatedContent = content.length > 2000 ? content.substring(0, 2000) + '\n...[truncated]' : content;
+            projectContent += `\n--- ${file.path} ---\n${truncatedContent}\n`;
+          }
+        }
+      }
+    } catch (error: any) {
+      console.error(`❌ [Context] Repository scan failed: ${error.message}`);
+    }
+  } else {
+    // Process changed files
+    const priorityFiles = relevantFiles.slice(0, 10);
+    
+    for (const filePath of priorityFiles) {
+      const content = await getFileContent(octokit, owner, repo, filePath);
+      if (content && content.length > 0) {
+        // Limit content to avoid overwhelming the AI
+        const truncatedContent = content.length > 2000 ? content.substring(0, 2000) + '\n...[truncated]' : content;
+        projectContent += `\n--- ${filePath} ---\n${truncatedContent}\n`;
+      }
     }
   }
 
-  console.log(`📊 [getRelevantChangedFiles] Final content length: ${changedContent.length} characters`);
-  return changedContent;
+  console.log(`📊 [Context] Total project content: ${projectContent.length} characters`);
+  return projectContent;
 }
 
 export const mastra = new Mastra({
@@ -116,212 +118,162 @@ export const mastra = new Mastra({
     port: 8383,
     middleware: [
       async (c, next) => {
-        console.log(`🌐 [Middleware] ${c.req.method} ${c.req.path}`);
-        
         if (c.req.method === 'POST' && c.req.path === '/api/github-webhook') {
-          console.log('🎉 GitHub Push webhook received!');
-          console.log(`🕒 [Webhook] Timestamp: ${new Date().toISOString()}`);
+          console.log('🚀 [Webhook] GitHub push received');
           
           try {
-            console.log('📥 [Webhook] Parsing request body...');
             const payload = await c.req.json();
-            console.log('✅ [Webhook] Request body parsed successfully');
-            console.log('🔍 [Webhook] Payload keys:', Object.keys(payload));
-            console.log('📋 [Webhook] Raw payload preview:', JSON.stringify(payload, null, 2).substring(0, 500));
-
-            console.log('🔍 [Webhook] Validating payload schema...');
             const pushData = pushPayloadSchema.parse(payload);
-            console.log('✅ [Webhook] Payload schema validation passed');
-            console.log('📊 [Webhook] Parsed data:', {
-              ref: pushData.ref,
-              repository: pushData.repository.name,
-              owner: pushData.repository.owner.login,
-              default_branch: pushData.repository.default_branch,
-              head_commit_exists: !!pushData.head_commit
-            });
 
             if (!pushData.head_commit) {
-                console.log('❌ [Webhook] No head_commit found, skipping');
-                return c.json({ status: 'skipped', reason: 'No head_commit found' });
+              console.log('❌ [Webhook] No head_commit, skipping');
+              return c.json({ status: 'skipped', reason: 'No head_commit found' });
             }
 
-            console.log('📝 [Webhook] Head commit message:', pushData.head_commit.message);
-            if (pushData.head_commit.message.includes('[AI]')) {
-              console.log('🤖 [Webhook] Push was from our AI bot. Skipping to prevent loop.');
-              return c.json({ status: 'skipped', reason: 'AI commit' });
-            }
+            console.log(`📝 [Webhook] Commit: "${pushData.head_commit.message}"`);
+            
+            // REMOVE AI CHECK - Let it update its own README too!
+            // This way it can improve the README based on its own updates
 
             const defaultBranchRef = `heads/${pushData.repository.default_branch}`;
-            console.log('🌿 [Webhook] Expected branch ref:', `refs/${defaultBranchRef}`);
-            console.log('🌿 [Webhook] Actual branch ref:', pushData.ref);
-            
             if (pushData.ref !== `refs/${defaultBranchRef}`) {
-              console.log(`🚫 [Webhook] Push was to branch ${pushData.ref}, not default branch. Skipping.`);
+              console.log(`🚫 [Webhook] Not default branch, skipping`);
               return c.json({ status: 'skipped', reason: 'Not default branch' });
             }
 
             const owner = pushData.repository.owner.login;
             const repo = pushData.repository.name;
-            console.log(`🎯 [Webhook] Push to default branch detected. Generating README for ${owner}/${repo}`);
+            console.log(`🎯 [Webhook] Processing ${owner}/${repo}`);
 
-            console.log('🔑 [GitHub] Initializing Octokit...');
-            console.log('🔑 [GitHub] GitHub token exists:', !!process.env.GITHUB_TOKEN);
-            console.log('🔑 [GitHub] GitHub token length:', process.env.GITHUB_TOKEN?.length || 0);
-            
             const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
-            console.log('✅ [GitHub] Octokit initialized successfully');
             
-            // Get all changed files from the push
+            // Get all changed files
             const allChangedFiles = [
               ...pushData.head_commit.added,
               ...pushData.head_commit.modified,
               ...pushData.head_commit.removed
             ];
 
-            console.log(`📁 [Files] Processing ${allChangedFiles.length} changed files:`);
-            console.log('   Added:', pushData.head_commit.added);
-            console.log('   Modified:', pushData.head_commit.modified);
-            console.log('   Removed:', pushData.head_commit.removed);
+            console.log(`📁 [Files] Changed: ${allChangedFiles.length} files`);
+            console.log(`   Added: ${pushData.head_commit.added.length}`);
+            console.log(`   Modified: ${pushData.head_commit.modified.length}`);
+            console.log(`   Removed: ${pushData.head_commit.removed.length}`);
 
             // Get package.json for project context
-            console.log('📦 [Package] Attempting to fetch package.json...');
             let packageJsonContent = '';
-            try {
-              const { data: packageJsonData } = await octokit.repos.getContent({ owner, repo, path: 'package.json' });
-              packageJsonContent = Buffer.from((packageJsonData as any).content, 'base64').toString('utf-8');
-              console.log('✅ [Package] package.json found and decoded');
-              console.log('📋 [Package] Content preview:', packageJsonContent.substring(0, 200));
-            } catch (error: any) {
-              console.log('❌ [Package] package.json not found, continuing without it');
-              console.log('   Error:', error.message);
+            const packageContent = await getFileContent(octokit, owner, repo, 'package.json');
+            if (packageContent) {
+              packageJsonContent = packageContent;
             }
 
-            // Get existing README for context
-            console.log('📖 [README] Attempting to fetch existing README.md...');
+            // Get existing README
             let existingReadme = '';
-            try {
-              const { data: readmeData } = await octokit.repos.getContent({ owner, repo, path: 'README.md' });
-              existingReadme = Buffer.from((readmeData as any).content, 'base64').toString('utf-8');
-              console.log('✅ [README] Existing README.md found and decoded');
-              console.log('📋 [README] Current length:', existingReadme.length);
-              console.log('📋 [README] Preview:', existingReadme.substring(0, 200));
-            } catch (error: any) {
-              console.log('❌ [README] README.md not found, will create new one');
-              console.log('   Error:', error.message);
+            const readmeContent = await getFileContent(octokit, owner, repo, 'README.md');
+            if (readmeContent) {
+              existingReadme = readmeContent;
             }
 
-            // Get content of relevant changed files only
-            console.log('🔄 [Content] Getting content of relevant changed files...');
-            const changedFilesContent = await getRelevantChangedFiles(octokit, owner, repo, allChangedFiles);
-            console.log('✅ [Content] Finished getting changed files content');
+            // Get project context (changed files or repository scan)
+            const projectContext = await getProjectContext(octokit, owner, repo, allChangedFiles);
 
-            // Build focused context for AI
-            console.log('🧠 [AI] Building context for AI agent...');
-            const contentToAnalyze = `
-Project: ${repo}
-Recent changes summary: ${pushData.head_commit.message}
+            // Build AI prompt
+            const aiPrompt = `
+# README Update Task
 
-Files changed in this push:
+## Project Information
+- Repository: ${owner}/${repo}
+- Recent changes: ${pushData.head_commit.message}
+- Files changed: ${allChangedFiles.length} (${pushData.head_commit.added.length} added, ${pushData.head_commit.modified.length} modified, ${pushData.head_commit.removed.length} removed)
+
+## Changed Files List
 ${allChangedFiles.map(file => `- ${file}`).join('\n')}
 
-${packageJsonContent ? `Package.json:\n${packageJsonContent}\n` : ''}
+## Current Package.json
+${packageJsonContent ? packageJsonContent : 'No package.json found'}
 
-${existingReadme ? `Current README.md:\n${existingReadme}\n` : ''}
+## Current README.md
+${existingReadme ? existingReadme : 'No existing README found'}
 
-Content of changed files:
-${changedFilesContent}
+## Project Code Context
+${projectContext ? projectContext : 'No relevant code files found'}
 
-Please update the README.md based on these recent changes. Keep the existing structure but update relevant sections to reflect the new changes.
+## Instructions
+Generate a comprehensive and accurate README.md that:
+1. Reflects the current state of the project based on the code
+2. Includes proper installation instructions if applicable
+3. Explains what the project does clearly
+4. Documents key features and usage
+5. Updates any sections that need to reflect recent changes
+6. Maintains a professional and informative tone
+
+Please generate the complete README.md content.
             `.trim();
 
-            console.log('📏 [AI] Context length:', contentToAnalyze.length);
-            console.log('📋 [AI] Context preview:', contentToAnalyze.substring(0, 300));
+            console.log(`🧠 [AI] Sending ${aiPrompt.length} characters to agent`);
+            console.log(`📋 [AI] Context includes: packageJson=${!!packageJsonContent}, existingReadme=${!!existingReadme}, projectCode=${!!projectContext}`);
 
-            console.log('🤖 [Agent] Getting readmeAgent...');
+            // Generate README with AI
             const agent = mastra.getAgent('readmeAgent');
-            console.log('✅ [Agent] readmeAgent retrieved successfully');
-            
-            console.log('🚀 [Agent] Calling agent.generate...');
-            const response = await agent.generate([{ role: 'user', content: contentToAnalyze }]);
-            console.log('✅ [Agent] Agent.generate completed');
-            console.log('📝 [Agent] Response type:', typeof response);
-            console.log('📝 [Agent] Response keys:', Object.keys(response));
-            
-            const readmeContent = response.text;
-            console.log('📖 [Agent] Generated README length:', readmeContent?.length || 0);
-            console.log('📋 [Agent] Generated README preview:', readmeContent?.substring(0, 200));
+            const response = await agent.generate([{ role: 'user', content: aiPrompt }]);
+            const newReadmeContent = response.text;
 
-            console.log('--- 🎯 README.md content generated by AI ---');
+            if (!newReadmeContent || newReadmeContent.length < 50) {
+              console.error(`❌ [AI] Generated README too short: ${newReadmeContent?.length || 0} chars`);
+              return c.json({ success: false, error: 'Generated README too short' }, 500);
+            }
 
-            console.log('🔍 [Update] Checking if README.md already exists...');
+            console.log(`✅ [AI] Generated README: ${newReadmeContent.length} characters`);
+
+            // Check if README already exists to get SHA
             let existingFileSha: string | undefined;
             try {
               const { data: existingFileData } = await octokit.repos.getContent({ owner, repo, path: 'README.md' });
               existingFileSha = (existingFileData as any).sha;
-              console.log('✅ [Update] Found existing README.md with SHA:', existingFileSha);
             } catch (error: any) {
-              if (error.status !== 404) {
-                console.error('💥 [Update] Unexpected error checking existing README:', error);
-                throw error;
-              }
-              console.log('❌ [Update] README.md not found. Creating a new one.');
+              if (error.status !== 404) throw error;
+              console.log('📝 [Update] Creating new README.md');
             }
 
-            console.log('💾 [Commit] Creating/updating README.md...');
-            console.log('📊 [Commit] Commit details:', {
-              owner,
-              repo,
-              path: 'README.md',
-              branch: pushData.repository.default_branch,
-              hasSha: !!existingFileSha,
-              contentLength: readmeContent?.length || 0
-            });
-
+            // Commit the new README
             const commitResult = await octokit.repos.createOrUpdateFileContents({
               owner,
               repo,
               path: 'README.md',
               message: 'docs: [AI] Update README.md based on recent changes',
-              content: Buffer.from(readmeContent).toString('base64'),
+              content: Buffer.from(newReadmeContent).toString('base64'),
               sha: existingFileSha,
               committer: { name: 'AI README Bot', email: 'bot@nosana.io' },
               branch: pushData.repository.default_branch
             });
 
-            console.log('✅ [Commit] Successfully updated README.md');
-            console.log('📊 [Commit] Commit result:', {
+            console.log(`🎉 [Success] README updated successfully`);
+            console.log(`🔗 [Success] Commit: ${commitResult.data.commit.html_url}`);
+
+            return c.json({ 
+              success: true, 
+              message: "README updated successfully",
+              filesProcessed: allChangedFiles.length,
+              readmeLength: newReadmeContent.length,
               commit_sha: commitResult.data.commit.sha,
               commit_url: commitResult.data.commit.html_url
             });
 
-            const result = { 
-              success: true, 
-              message: "README updated",
-              filesProcessed: allChangedFiles.length,
-              relevantFiles: changedFilesContent ? 'Content analyzed' : 'No relevant files found',
-              commit_sha: commitResult.data.commit.sha
-            };
-
-            console.log('🎉 [Success] Final result:', result);
-            return c.json(result);
-
           } catch (error: any) {
-            console.error('💥💥💥 [ERROR] Error processing push webhook:');
-            console.error('   Name:', error.name);
-            console.error('   Message:', error.message);
-            console.error('   Stack:', error.stack);
-            console.error('   Full error object:', error);
+            console.error(`💥 [ERROR] Webhook processing failed:`);
+            console.error(`   ${error.name}: ${error.message}`);
             
             if (error.response) {
-              console.error('   Response status:', error.response.status);
-              console.error('   Response data:', error.response.data);
+              console.error(`   API Response: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
             }
             
-            return c.json({ success: false, error: 'Failed to process push', details: error.message }, 500);
+            return c.json({ 
+              success: false, 
+              error: 'Failed to process webhook', 
+              details: error.message 
+            }, 500);
           }
         }
         
-        console.log('🔄 [Middleware] Calling next middleware...');
         await next();
       },
     ],
