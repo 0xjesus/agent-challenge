@@ -1,7 +1,7 @@
 # Agent Challenge
 
 ## About The Project
-This project is an agent framework built using Mastra, designed to facilitate the development and deployment of various agents. It includes agents for monitoring GitHub pull requests and a weather agent, leveraging AI capabilities through dependencies like OpenAI and Ollama. The project is structured to support easy deployment and management of these agents in a cloud environment.
+This project is an agent framework built using Mastra, designed to facilitate the development and deployment of various agents. It includes agents for monitoring GitHub pull requests and a weather agent, leveraging AI capabilities through dependencies like OpenAI and Ollama. The project is structured to support easy deployment and management of these agents in a cloud environment, utilizing Nosana for job posting and deployment.
 
 ## Installation
 To install the necessary dependencies, run the following command:
