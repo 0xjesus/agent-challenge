@@ -1,7 +1,7 @@
 # Agent Challenge
 
 ## About The Project
-This project is an agent framework built using Mastra, designed to facilitate the development and deployment of various agents, including a GitHub Pull Request monitor and a weather agent. It leverages several AI and logging libraries to enhance functionality and performance, making it suitable for hackathons and other collaborative coding events.
+This project is an agent framework built using Mastra, designed to facilitate the development and deployment of various agents, including a GitHub Pull Request Monitor and a Weather Agent. It leverages several dependencies to interact with APIs, manage workflows, and handle data efficiently.
 
 ## Installation
 To install the necessary dependencies, run the following command:
@@ -26,19 +26,14 @@ pnpm run deploy:qwen
 ```
 
 ## Key Dependencies
-- `@ai-sdk/openai`: ^1.3.22
-- `@mastra/core`: ^0.10.5
-- `@mastra/libsql`: ^0.10.2
-- `@mastra/loggers`: ^0.10.2
-- `@mastra/memory`: ^0.10.3
-- `@octokit/rest`: ^22.0.0
-- `dotenv`: ^16.5.0
-- `ollama-ai-provider`: ^1.2.0
-- `zod`: ^3.25.67
+- `@ai-sdk/openai`: For integrating OpenAI functionalities.
+- `@mastra/core`: Core functionalities of the Mastra framework.
+- `@mastra/libsql`: Library for SQL database interactions.
+- `@mastra/loggers`: Logging utilities for the Mastra framework.
+- `@mastra/memory`: Memory management for agents.
+- `@octokit/rest`: GitHub API client for interacting with repositories.
+- `dotenv`: For loading environment variables from a .env file.
+- `ollama-ai-provider`: AI provider integration.
+- `zod`: Schema validation for TypeScript.
 
-## Development Dependencies
-- `@biomejs/biome`: 2.0.4
-- `@nosana/cli`: ^1.0.52
-- `@types/node`: ^24.0.3
-- `mastra`: ^0.10.5
-- `typescript`: ^5.8.3
+This README provides a concise overview of the project, its installation, usage, and key dependencies to help you get started quickly.
