@@ -3,11 +3,8 @@
 import { Mastra } from "@mastra/core";
 import { z } from "zod";
 import { Octokit } from "@octokit/rest";
-// --- ¡AQUÍ ESTÁ LA CORRECCIÓN! ---
-// Apuntamos a la carpeta que SÍ existe.
-import { readmeAgent } from "./agents/github-pr-monitor"; 
+import { readmeAgent } from "./agents/github-pr-monitor";
 
-// Schema para el payload del evento "push"
 const pushPayloadSchema = z.object({
   ref: z.string(),
   head_commit: z.object({
@@ -23,10 +20,9 @@ const pushPayloadSchema = z.object({
 });
 
 export const mastra = new Mastra({
-  // Asegúrate que el agente que registras coincida con el que importas
   agents: { readmeAgent },
   server: {
-    port: 8080,
+    port: 8383,
     middleware: [
       async (c, next) => {
         if (c.req.method === 'POST' && c.req.path === '/api/github-webhook') {
@@ -45,8 +41,9 @@ export const mastra = new Mastra({
               return c.json({ status: 'skipped', reason: 'AI commit' });
             }
 
-            const defaultBranchRef = `refs/heads/${pushData.repository.default_branch}`;
-            if (pushData.ref !== defaultBranchRef) {
+            // CORRECCIÓN: Quitamos 'refs/' para que la ruta sea correcta
+            const defaultBranchRef = `heads/${pushData.repository.default_branch}`;
+            if (pushData.ref !== `refs/${defaultBranchRef}`) {
               console.log(`Push was to branch ${pushData.ref}, not default branch. Skipping.`);
               return c.json({ status: 'skipped', reason: 'Not default branch' });
             }
@@ -57,6 +54,7 @@ export const mastra = new Mastra({
 
             const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
             
+            // Usamos la variable corregida aquí
             const { data: refData } = await octokit.git.getRef({ owner, repo, ref: defaultBranchRef });
             const { data: treeData } = await octokit.git.getTree({ owner, repo, tree_sha: refData.object.sha, recursive: 'true' });
             const fileList = treeData.tree.map(file => file.path).join('\n');
